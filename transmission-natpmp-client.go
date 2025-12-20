@@ -91,6 +91,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger.Info("I can talk to transmission")
 	logger.Debug("Transmission's configured peer port is", "port", peerPort)
 
 	natpmpGatewayIp, err := net.ResolveIPAddr("ip", *natpmpGateway)
@@ -109,7 +110,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger.Info("I can request port mappings")
 	logger.Debug("Successfully mapped", "port", mappedPort)
+
+	logger.Info("Successfully started")
 
 	var waitGroup sync.WaitGroup
 	quit := make(chan struct{})
