@@ -18,7 +18,8 @@ import (
 	natpmp "github.com/jackpal/go-nat-pmp"
 )
 
-const natpmpPortMappingLifespanSeconds = 1 * 60 // 2 hours as recommended by rfc6886
+const natpmpPortMappingLifespanSeconds = 60 // by rfc6886 recommends 2 hours but protonvpn documentation seems to hint 60 seconds
+const natpmpPortMappingRefreshIntervalSeconds = 45
 
 type TransmissionConnectionConfig struct {
 	url      string
@@ -105,7 +106,7 @@ func main() {
 		close(quit)
 	}()
 
-	ticker := time.NewTicker(natpmpPortMappingLifespanSeconds / 2 * time.Second)
+	ticker := time.NewTicker(natpmpPortMappingRefreshIntervalSeconds * time.Second)
 	waitGroup.Add(1)
 	go func() {
 		defer waitGroup.Done()
@@ -122,6 +123,7 @@ func main() {
 						log.Println("Refreshed port mapping")
 					} else {
 						log.Println("Port mapping changed from", peerPort, "to", mappedPort)
+						setPeerPort(transmissionConnection, int(mappedPort))
 					}
 					peerPort = int(mappedPort)
 				}
@@ -147,6 +149,7 @@ func updateTransmissionPortMapping(transmissionConnection TransmissionConnection
 	}
 
 	if transmissionPeerPort != int(_mappedPort) {
+		log.Println("Updating transmission peer port...")
 		err = setPeerPort(transmissionConnection, int(mappedPort))
 		if err != nil {
 			return
@@ -161,16 +164,21 @@ func createPortMapping(natpmpClient natpmp.Client, desiredPort uint) (mappedPort
 	port := int(desiredPort)
 
 	for i := 0; i < 3; i++ {
-		result, err := natpmpClient.AddPortMapping("tcp", port, port, natpmpPortMappingLifespanSeconds)
+		log.Println("Attempting to map port", port, "...")
+		result, err := natpmpClient.AddPortMapping("tcp", 0, port, natpmpPortMappingLifespanSeconds)
 		if err != nil {
+			log.Println("Failed to create port mapping:", err)
 			continue
+		}else{
+			log.Println("No errors mapping port.  Mapped port:", result.MappedExternalPort, "->", result.InternalPort)
 		}
 
-		if result.MappedExternalPort != result.InternalPort {
+		if result.InternalPort > 0 && result.MappedExternalPort != result.InternalPort {
 			port = int(result.MappedExternalPort)
 			natpmpClient.AddPortMapping("tcp", int(result.InternalPort), 0, 0)
 		} else {
 			mappedPort = uint(result.MappedExternalPort)
+			break
 		}
 	}
 
@@ -179,12 +187,12 @@ func createPortMapping(natpmpClient natpmp.Client, desiredPort uint) (mappedPort
 		return
 	}
 
-	addUdpPortMappingResult, err := natpmpClient.AddPortMapping("udp", int(mappedPort), int(mappedPort), natpmpPortMappingLifespanSeconds)
+	addUdpPortMappingResult, err := natpmpClient.AddPortMapping("udp", 0, int(mappedPort), natpmpPortMappingLifespanSeconds)
 	if err != nil {
 		return
 	}
 
-	if addUdpPortMappingResult.MappedExternalPort != addUdpPortMappingResult.InternalPort {
+	if addUdpPortMappingResult.InternalPort > 0 && addUdpPortMappingResult.MappedExternalPort != addUdpPortMappingResult.InternalPort {
 		err = fmt.Errorf("Failed to create a UDP port mapping with the same TCP port")
 	}
 
