@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +20,8 @@ import (
 
 const natpmpPortMappingLifespanSeconds = 60 // by rfc6886 recommends 2 hours but protonvpn documentation seems to hint 60 seconds
 const natpmpPortMappingRefreshIntervalSeconds = 45
+
+var logger *slog.Logger
 
 type TransmissionConnectionConfig struct {
 	url      string
@@ -59,7 +61,19 @@ func main() {
 	username := flag.String("username", "", "Transmission RPC username")
 	password := flag.String("password", "", "Transmission RPC password")
 	natpmpGateway := flag.String("natpmp-gateway", "", "The IP of the gateway to request port mappings from")
+	verbose := flag.Bool("verbose", false, "Enable verbose output")
 	flag.Parse()
+
+	var logOutputLevel slog.Level
+	if *verbose {
+		logOutputLevel = slog.LevelDebug
+	} else {
+		logOutputLevel = slog.LevelInfo
+	}
+	logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logOutputLevel,
+	}))
+	logger.Info("Starting")
 
 	transmissionConnectionConfig := TransmissionConnectionConfig{
 		url:      *url,
@@ -73,27 +87,29 @@ func main() {
 
 	peerPort, err := getPeerPort(transmissionConnection)
 	if err != nil {
-		log.Fatalln("Error:", err)
+		logger.Error("Error getting configured peer port from transmission", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("Transmission's configured peer port is:", peerPort)
+	logger.Debug("Transmission's configured peer port is", "port", peerPort)
 
 	natpmpGatewayIp, err := net.ResolveIPAddr("ip", *natpmpGateway)
 	if err != nil {
-		return
+		logger.Error("Invalid argument: natpmp gateway IP address is not a valid IP address", "natpmpGateway", *natpmpGateway)
+		os.Exit(1)
 	}
 
 	natpmpClient := natpmp.NewClient(natpmpGatewayIp.IP)
 	externalAddressResponse, err := natpmpClient.GetExternalAddress()
-	log.Println("Our external IP address is:", externalAddressResponse.ExternalIPAddress)
+	logger.Debug("External IP address", "externalIpAddress", externalAddressResponse.ExternalIPAddress)
 
 	mappedPort, err := updateTransmissionPortMapping(transmissionConnection, *natpmpClient, uint(peerPort))
 	if err != nil {
-		log.Println("Failed to map and configure port:", err)
+		logger.Error("Failed to map and configure port", "error", err)
 		os.Exit(1)
 	}
 
-	log.Println("Successfully mapped port:", mappedPort)
+	logger.Debug("Successfully mapped", "port", mappedPort)
 
 	var waitGroup sync.WaitGroup
 	quit := make(chan struct{})
@@ -101,7 +117,7 @@ func main() {
 	signal.Notify(sigInteruptChannel, os.Interrupt)
 	go func() {
 		<-sigInteruptChannel
-		log.Println("Shutting down...")
+		logger.Info("Shutting down...")
 		close(quit)
 	}()
 
@@ -113,15 +129,15 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				log.Println("Updating port mapping...")
+				logger.Debug("Updating port mapping...")
 				mappedPort, err = updateTransmissionPortMapping(transmissionConnection, *natpmpClient, uint(peerPort))
 				if err != nil {
-					log.Println("Failed to update port mapping:", err)
+					logger.Error("Failed to update port mapping", "error", err)
 				} else {
 					if mappedPort == uint(peerPort) {
-						log.Println("Refreshed port mapping")
+						logger.Debug("Refreshed port mapping", "port", mappedPort)
 					} else {
-						log.Println("Port mapping changed from", peerPort, "to", mappedPort)
+						logger.Info("Port mapping changed", "previousPort", peerPort, "newPort", mappedPort)
 						setPeerPort(transmissionConnection, int(mappedPort))
 					}
 					peerPort = int(mappedPort)
@@ -148,7 +164,7 @@ func updateTransmissionPortMapping(transmissionConnection TransmissionConnection
 	}
 
 	if transmissionPeerPort != int(_mappedPort) {
-		log.Println("Updating transmission peer port...")
+		logger.Debug("Updating transmission peer port...")
 		err = setPeerPort(transmissionConnection, int(mappedPort))
 		if err != nil {
 			return
@@ -163,13 +179,13 @@ func createPortMapping(natpmpClient natpmp.Client, desiredPort uint) (mappedPort
 	port := int(desiredPort)
 
 	for i := 0; i < 3; i++ {
-		log.Println("Attempting to map port", port, "...")
+		logger.Debug("Attempting to map port", "desiredPort", port)
 		result, err := natpmpClient.AddPortMapping("tcp", 0, port, natpmpPortMappingLifespanSeconds)
 		if err != nil {
-			log.Println("Failed to create port mapping:", err)
+			logger.Error("Failed to create port mapping", "desiredPort", port, "error", err)
 			continue
 		} else {
-			log.Println("No errors mapping port.  Mapped port:", result.MappedExternalPort, "->", result.InternalPort)
+			logger.Debug("Successfully mapped port", "externalPort", result.MappedExternalPort, "internalPort", result.InternalPort)
 		}
 
 		if result.InternalPort > 0 && result.MappedExternalPort != result.InternalPort {
