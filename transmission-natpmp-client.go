@@ -67,7 +67,6 @@ func main() {
 		password: *password,
 	}
 
-	// transmissionSessionId, _ := getTransmissionSessionId(transmissionConnectionConfig)
 	transmissionConnection := TransmissionConnection{
 		transmissionConnectionConfig: transmissionConnectionConfig,
 	}
@@ -169,7 +168,7 @@ func createPortMapping(natpmpClient natpmp.Client, desiredPort uint) (mappedPort
 		if err != nil {
 			log.Println("Failed to create port mapping:", err)
 			continue
-		}else{
+		} else {
 			log.Println("No errors mapping port.  Mapped port:", result.MappedExternalPort, "->", result.InternalPort)
 		}
 
@@ -196,21 +195,6 @@ func createPortMapping(natpmpClient natpmp.Client, desiredPort uint) (mappedPort
 		err = fmt.Errorf("Failed to create a UDP port mapping with the same TCP port")
 	}
 
-	return
-}
-
-func getTransmissionSessionId(transmissionConnectionConfig TransmissionConnectionConfig) (sessionId string, err error) {
-	req, _ := http.NewRequest("POST", transmissionConnectionConfig.url, nil)
-	req.SetBasicAuth(transmissionConnectionConfig.username, transmissionConnectionConfig.password)
-
-	httpClient := &http.Client{}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return
-	}
-	resp.Body.Close()
-
-	sessionId = getTransmissionSessionIdFromResponse(resp)
 	return
 }
 
